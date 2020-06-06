@@ -16,6 +16,5 @@ target_link_libraries(
     SDL2::SDL2
     GLEW::GLEW
     GL
-    imgui_sdl_opengl3
 )
 # TODO: static glew or shared glew_s?
