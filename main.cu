@@ -62,12 +62,15 @@ struct SDLOpenGLContext {
   }
 };
 
+
+__host__ __device__
 float mod(float x, float y) {
   return x - std::floor(x / y) * y;
 }
 
 using color = std::tuple<int, int, int>;
 
+__host__ __device__
 color hsl2rgb(float h, float s, float l) {
   h = mod(h, 360);
   float c = (1 - std::abs(2 * l - 1)) * s;
@@ -94,6 +97,7 @@ color hsl2rgb(float h, float s, float l) {
 struct World {
   float pos_x = 0, pos_y = 0;
 
+  __device__
   color worldAt(float x, float y) {
     x = std::floor(x * 10) / 10;
     y = std::floor(y * 10) / 10;
@@ -104,15 +108,28 @@ struct World {
     };
   }
 
+  __device__
   color viewAt(float dx, float dy, float t) {
     t = std::sin(t);
     t = std::pow(std::abs(t), 1/1.5f) * (t < 0 ? -1 : 1);
     float rad = (dx * dx + dy * dy);
-    auto fin = std::complex<float>(dx, dy) * std::pow(std::complex<float>(std::exp(1)), std::complex<float>(0, std::sqrt(rad) * 5 * t));
-    float fin_dx = fin.real();
-    float fin_dy = fin.imag();
-    auto [r, g, b] = worldAt(pos_x + fin_dx, pos_y + fin_dy);
-    float k = std::max(0.0f, 1 - (dx*dx + dy*dy));
+//    auto fin = std::complex<float>(dx, dy) * std::pow(std::complex<float>(std::exp(1)), std::complex<float>(0, std::sqrt(rad) * 5 * t));
+//    float fin_dx = fin.real();
+//    float fin_dy = fin.imag();
+
+    float phi = std::sqrt(rad) * 5 * t;
+    float sin_ = std::sin(phi);
+    float cos_ = std::cos(phi);
+
+    float fin_dx = dx * cos_ - dy * sin_;
+    float fin_dy = dx * sin_ + dy * cos_;
+    int r, g, b;
+    auto col = worldAt(pos_x + fin_dx, pos_y + fin_dy);
+    r = std::get<0>(col);
+    g = std::get<1>(col);
+    b = std::get<2>(col);
+
+    float k = std::max(0.3f, 1 - (dx*dx + dy*dy));
     return {r * k, g * k, b * k};
   }
 };
@@ -126,8 +143,35 @@ struct Axis {
   }
 };
 
+__global__
+void render(int w, int h, color *colors, World world, float t) {
+  float k = std::min(w, h) / 2.0f;
+
+  int idx_x = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride_x = blockDim.x * gridDim.x;
+
+  int idx_y = blockIdx.y * blockDim.y + threadIdx.y;
+  int stride_y = blockDim.y * gridDim.y;
+
+  for (int y = idx_y; y < h; y += stride_y) {
+    for (int x = idx_x; x < w; x += stride_x) {
+      float rel_x = (x + 0.5f - w / 2.0f) / k;
+      float rel_y = -(y + 0.5f - h / 2.0f) / k;
+
+      auto &targ = colors[y * w + x];
+      auto col = world.viewAt(rel_x, rel_y, t);
+      std::get<0>(targ) = std::get<0>(col);
+      std::get<1>(targ) = std::get<1>(col);
+      std::get<2>(targ) = std::get<2>(col);
+    }
+  }
+}
+
+
 void dow() {
-  auto ctx = SDLOpenGLContext("Hello!", 100, 100, 500, 500, SDL_WINDOW_SHOWN);
+  const int W = 1600;
+  const int H = 900;
+  auto ctx = SDLOpenGLContext("Hello!", 100, 100, W, H, SDL_WINDOW_SHOWN);
 
   printVal(GL_RENDERER, "GL_VENDOR");
   printVal(GL_VENDOR, "GL_RENDERER");
@@ -136,7 +180,8 @@ void dow() {
   Axis dx, dy;
   World world;
 
-
+  color *colors;
+  cudaMallocManaged(&colors, sizeof(color) * W * H);
 
   auto prev_frame = std::chrono::steady_clock::now();
   auto start = prev_frame;
@@ -145,7 +190,7 @@ void dow() {
     float dt = std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(now - prev_frame).count();
     prev_frame = now;
 
-    std::cout << dt << std::endl;
+    std::cout << dt - 1/60.0f << std::endl;
 
     SDL_Event evt;
     bool quit = false;
@@ -192,16 +237,21 @@ void dow() {
 
 
     SDL_LockSurface(surf);
+
+    render<<<10, 256>>>(surf->w, surf->h, colors, world, t);
+    cudaDeviceSynchronize();
+
     auto pixels = reinterpret_cast<uint32_t*>(surf->pixels);
     for (int y = 0; y < surf->h; ++y) {
       for (int x = 0; x < surf->w; ++x) {
         auto pix = pixels + y * surf->pitch / 4 + x;
 
-        float k = std::min(surf->w, surf->h) / 2.0f;
-        float rel_x = (x + 0.5f - surf->w / 2.0f) / k;
-        float rel_y = -(y + 0.5f - surf->h / 2.0f) / k;
-
-        auto [r, g, b] = world.viewAt(rel_x, rel_y, t);
+//        float k = std::min(surf->w, surf->h) / 2.0f;
+//        float rel_x = (x + 0.5f - surf->w / 2.0f) / k;
+//        float rel_y = -(y + 0.5f - surf->h / 2.0f) / k;
+//
+        int r, g, b;
+        std::tie(r, g, b) = colors[y * surf->w + x];//world.viewAt(rel_x, rel_y, t);
         *pix = SDL_MapRGB(
             surf->format,
             r,
@@ -216,8 +266,9 @@ void dow() {
     SDL_UpdateWindowSurface(ctx.win);
 
     auto left = std::chrono::steady_clock::now() - prev_frame;
-    SDL_Delay(std::max(0.0f, 1000.0f / 30 - std::chrono::duration_cast<std::chrono::milliseconds>(left).count()));
+    SDL_Delay(std::max(0.0f, 1000.0f / 60 - std::chrono::duration_cast<std::chrono::milliseconds>(left).count()));
   }
+  cudaFree(colors);
 }
 
 int main(int, char**) {
