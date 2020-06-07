@@ -18,5 +18,6 @@ target_link_libraries(
     GLEW::GLEW
     GL
 )
+target_include_directories(graphics_hello PUBLIC "/opt/cuda/include")  # TODO: temporary fix for code insight
 target_compile_options(graphics_hello PUBLIC "--expt-relaxed-constexpr")
 # TODO: static glew or shared glew_s?

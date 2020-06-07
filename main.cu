@@ -5,6 +5,10 @@
 #include <chrono>
 #include <tuple>
 #include <complex>
+#include <iomanip>
+#include <cassert>
+#include <cuda_gl_interop.h>
+#include <surface_functions.h>
 
 using namespace std::chrono_literals;
 
@@ -23,7 +27,6 @@ class SDLError : public std::runtime_error {
 
 struct SDLOpenGLContext {
   SDL_Window *win = nullptr;
-  SDL_Renderer *renderer = nullptr;
   SDL_GLContext ctx = nullptr;
 
   SDLOpenGLContext(const std::string& title, int x, int y, int w, int h, uint32_t flags) {
@@ -31,46 +34,54 @@ struct SDLOpenGLContext {
       throw SDLError(std::string("SDL_Init: ") + SDL_GetError());
     }
 
+    assert(0 == SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE));
+    assert(0 == SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4));
+    assert(0 == SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 6));
+
     win = SDL_CreateWindow(title.c_str(), x, y, w, h, flags);
     if (!win) {
       SDL_Quit();
       throw SDLError(std::string("SDL_CreateWindow: ") + SDL_GetError());
     }
 
-    renderer = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
-//      std::cerr << "SDL_CreateRenderer error: " << SDL_GetError() << std::endl;
-      SDL_DestroyWindow(win);
-      SDL_Quit();
-      throw SDLError(std::string("SDL_CreateRenderer: ") + SDL_GetError());
-    }
-
     ctx = SDL_GL_CreateContext(win);
     if (ctx == nullptr) {
-      SDL_DestroyRenderer(renderer);
       SDL_DestroyWindow(win);
       SDL_Quit();
       throw SDLError(std::string("SDL_GL_CreateContext: ") + SDL_GetError());
     }
+
+    // ////... glewExperimental
+    GLenum glewError = glewInit();
+    if (glewError != GLEW_OK) {
+      SDL_GL_DeleteContext(ctx);
+      SDL_DestroyWindow(win);
+      SDL_Quit();
+      throw std::runtime_error(
+          std::string("glewInit: ")
+          + reinterpret_cast<const char *>(glewGetErrorString(glewError))
+      );
+    }
+
+    // maybe vsync
   }
 
   ~SDLOpenGLContext() {
     SDL_GL_DeleteContext(ctx);
-    SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(win);
     SDL_Quit();
   }
 };
 
 
-__host__ __device__
+//__host__ __device__
 float mod(float x, float y) {
   return x - std::floor(x / y) * y;
 }
 
 using color = std::tuple<int, int, int>;
 
-__host__ __device__
+//__host__ __device__
 color hsl2rgb(float h, float s, float l) {
   h = mod(h, 360);
   float c = (1 - std::abs(2 * l - 1)) * s;
@@ -97,7 +108,7 @@ color hsl2rgb(float h, float s, float l) {
 struct World {
   float pos_x = 0, pos_y = 0;
 
-  __device__
+//  __device__
   color worldAt(float x, float y) {
     x = std::floor(x * 10) / 10;
     y = std::floor(y * 10) / 10;
@@ -108,7 +119,7 @@ struct World {
     };
   }
 
-  __device__
+//  __device__
   color viewAt(float dx, float dy, float t) {
     t = std::sin(t);
     t = std::pow(std::abs(t), 1/1.5f) * (t < 0 ? -1 : 1);
@@ -143,45 +154,116 @@ struct Axis {
   }
 };
 
-__global__
-void render(int w, int h, color *colors, World world, float t) {
-  float k = std::min(w, h) / 2.0f;
+//__global__
+//void render(int w, int h, color *colors, World world, float t) {
+//  float k = std::min(w, h) / 2.0f;
+//
+//  int idx_x = blockIdx.x * blockDim.x + threadIdx.x;
+//  int stride_x = blockDim.x * gridDim.x;
+//
+//  int idx_y = blockIdx.y * blockDim.y + threadIdx.y;
+//  int stride_y = blockDim.y * gridDim.y;
+//
+//  for (int y = idx_y; y < h; y += stride_y) {
+//    for (int x = idx_x; x < w; x += stride_x) {
+//      float rel_x = (x + 0.5f - w / 2.0f) / k;
+//      float rel_y = -(y + 0.5f - h / 2.0f) / k;
+//
+//      auto &targ = colors[y * w + x];
+//      auto col = world.viewAt(rel_x, rel_y, t);
+//      std::get<0>(targ) = std::get<0>(col);
+//      std::get<1>(targ) = std::get<1>(col);
+//      std::get<2>(targ) = std::get<2>(col);
+//    }
+//  }
+//}
 
-  int idx_x = blockIdx.x * blockDim.x + threadIdx.x;
-  int stride_x = blockDim.x * gridDim.x;
+template< typename T >
+std::string int_to_hex( T i )
+{
+  std::stringstream stream;
+  stream << "0x"
+         << std::setfill ('0') << std::setw(sizeof(T)*2)
+         << std::hex << i;
+  return stream.str();
+}
 
-  int idx_y = blockIdx.y * blockDim.y + threadIdx.y;
-  int stride_y = blockDim.y * gridDim.y;
-
-  for (int y = idx_y; y < h; y += stride_y) {
-    for (int x = idx_x; x < w; x += stride_x) {
-      float rel_x = (x + 0.5f - w / 2.0f) / k;
-      float rel_y = -(y + 0.5f - h / 2.0f) / k;
-
-      auto &targ = colors[y * w + x];
-      auto col = world.viewAt(rel_x, rel_y, t);
-      std::get<0>(targ) = std::get<0>(col);
-      std::get<1>(targ) = std::get<1>(col);
-      std::get<2>(targ) = std::get<2>(col);
-    }
+void checkErr(int line_num, std::string line) {
+  GLenum err = glGetError();
+  if (err != GL_NO_ERROR) {
+    std::cerr << line_num << ": " << line << "\ngl error: " << glewGetErrorString(err) << " (" << int_to_hex(err) << ")" << std::endl;
+    throw std::runtime_error(std::to_string(err));
   }
 }
 
+#define glGuard(expr) \
+do { \
+  glGetError(); \
+  expr; \
+  checkErr(__LINE__, #expr); \
+} while (false)
+
+
+void __global__ smt(cudaSurfaceObject_t surf) {
+  surf2Dwrite(make_uchar4(255, 0, 0, 0), surf, 0, 0);
+};
+
 
 void dow() {
-  const int W = 1600;
-  const int H = 900;
-  auto ctx = SDLOpenGLContext("Hello!", 100, 100, W, H, SDL_WINDOW_SHOWN);
+  const int W = 30;
+  const int H = 30;
+  auto ctx = SDLOpenGLContext("Hello!", 100, 100, W, H, SDL_WINDOW_SHOWN | SDL_WINDOW_OPENGL);
 
   printVal(GL_RENDERER, "GL_VENDOR");
   printVal(GL_VENDOR, "GL_RENDERER");
   printVal(GL_VERSION, "GL_VERSION");
 
+  // https://stackoverflow.com/questions/31482816/opengl-is-there-an-easier-way-to-fill-window-with-a-texture-instead-using-vbo
+  GLuint fb = 0;
+  glGuard(glGenFramebuffers(1, &fb));
+  glGuard(glBindFramebuffer(GL_READ_FRAMEBUFFER, fb));
+
+  GLuint tex = 0;
+  glGuard(glGenTextures(1, &tex));
+  glGuard(glBindTexture(GL_TEXTURE_2D, tex));
+
+  glGuard(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, W, H, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
+  glGuard(glBindTexture(GL_TEXTURE_2D, 0));
+
+  glGuard(glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0));
+
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+  // https://forums.developer.nvidia.com/t/reading-and-writing-opengl-textures-with-cuda/31746/6
+  cudaGraphicsResource *resource;
+  assert(cudaSuccess == cudaGraphicsGLRegisterImage(&resource, tex, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore));
+  assert(cudaSuccess == cudaGraphicsMapResources(1, &resource));
+
+  cudaArray_t writeArray;
+  assert(cudaSuccess == cudaGraphicsSubResourceGetMappedArray(&writeArray, resource, 0, 0));
+
+  cudaResourceDesc descr = {};
+  descr.resType = cudaResourceTypeArray;
+  descr.res.array.array = writeArray;
+
+  cudaSurfaceObject_t surf;
+  assert(cudaSuccess == cudaCreateSurfaceObject(&surf, &descr));
+
+  smt<<<1, 1>>>(surf);
+  cudaDeviceSynchronize();
+
+//  gpu::error::check(cudaGraphicsUnmapResources(1, &writeresource, 0));
+//
+//  gpu::error::check(cudaGraphicsUnregisterResource(writeresource));
+//  int dbl = 123;
+//  glGuard(glGetIntegerv(GL_DOUBLEBUFFER, &dbl));
+//  std::cout << "dbl: " << dbl << std::endl;
+
   Axis dx, dy;
   World world;
 
-  color *colors;
-  cudaMallocManaged(&colors, sizeof(color) * W * H);
+//  color *colors;
+//  cudaMallocManaged(&colors, sizeof(color) * W * H);
 
   auto prev_frame = std::chrono::steady_clock::now();
   auto start = prev_frame;
@@ -233,42 +315,18 @@ void dow() {
     world.pos_x += a * dt;
     world.pos_y += b * dt;
 
-    SDL_Surface *surf = SDL_GetWindowSurface(ctx.win);
+    //    render<<<10, 256>>>(surf->w, surf->h, colors, world, t);
+    //    cudaDeviceSynchronize();
 
+    // TODO: clear?
+    glGuard(glBlitFramebuffer(0, 0, W, H, 0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_NEAREST));
 
-    SDL_LockSurface(surf);
-
-    render<<<10, 256>>>(surf->w, surf->h, colors, world, t);
-    cudaDeviceSynchronize();
-
-    auto pixels = reinterpret_cast<uint32_t*>(surf->pixels);
-    for (int y = 0; y < surf->h; ++y) {
-      for (int x = 0; x < surf->w; ++x) {
-        auto pix = pixels + y * surf->pitch / 4 + x;
-
-//        float k = std::min(surf->w, surf->h) / 2.0f;
-//        float rel_x = (x + 0.5f - surf->w / 2.0f) / k;
-//        float rel_y = -(y + 0.5f - surf->h / 2.0f) / k;
-//
-        int r, g, b;
-        std::tie(r, g, b) = colors[y * surf->w + x];//world.viewAt(rel_x, rel_y, t);
-        *pix = SDL_MapRGB(
-            surf->format,
-            r,
-            g,
-            b);
-      }
-    }
-    SDL_UnlockSurface(surf);
-
-//    std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(end - begin).count() << "ms" << std::endl;
-
-    SDL_UpdateWindowSurface(ctx.win);
+    SDL_GL_SwapWindow(ctx.win);
 
     auto left = std::chrono::steady_clock::now() - prev_frame;
     SDL_Delay(std::max(0.0f, 1000.0f / 60 - std::chrono::duration_cast<std::chrono::milliseconds>(left).count()));
   }
-  cudaFree(colors);
+//  cudaFree(colors);
 }
 
 int main(int, char**) {
