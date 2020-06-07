@@ -10,6 +10,7 @@
 #include <cuda_gl_interop.h>
 #include <surface_functions.h>
 #include "geom.h"
+#include "orbit.h"
 
 using namespace std::chrono_literals;
 
@@ -131,19 +132,37 @@ struct World {
     Vec pos(pos_x, pos_y);
     Vec d(dx, dy);
 
-    Vec m0(1, 0);
-    Vec d0 = Vec(1, 1).rotateBy(t / 10);
-    float itMy = intersectionTime(pos, d, m0, d0);
-    float itOther = intersectionTime(m0, d0, pos, d);
-    Vec fin;
-    if (itOther < 0 || itOther > 1 || itMy < 0 || itMy > 1) {
-      fin = pos + d;
-    } else {
-      brightness = 0.6;
-      Vec mid = pos + d * itMy;
-      fin = mid + d.symmetryOff(d0) * (1 - itMy);
-//      fin = pos + d * itMy;
+//    Vec m0(1, 0);
+//    Vec d0 = Vec(1, 1).rotateBy(t / 10);
+//    float itMy = intersectionTime(pos, d, m0, d0);
+//    float itOther = intersectionTime(m0, d0, pos, d);
+//    Vec fin;
+//    if (itOther < 0 || itOther > 1 || itMy < 0 || itMy > 1) {
+//      fin = pos + d;
+//    } else {
+//      brightness = 0.6;
+//      Vec mid = pos + d * itMy;
+//      fin = mid + d.symmetryOff(d0) * (1 - itMy);
+////      fin = pos + d * itMy;
+//    }
+
+    Vec vel = d / d.len();
+    float dist = d.len();
+    Vec c0(0, 1);
+
+//    Vec fin = c0 + twobody(0.001, dist, (pos - c0), vel);
+
+
+
+    float dt = 0.001;
+    for (int i = 0; i < 10000 && dist > 0; i++) {
+      Vec r = (c0 - pos);
+      Vec f = r / (r.len() * r.lensq());
+      vel += f * dt;
+      pos += vel * dt;
+      dist -= vel.len() * dt;
     }
+    Vec fin = pos;
 
     int r, g, b;
     auto col = worldAt(fin.x, fin.y);
@@ -227,6 +246,14 @@ void dow() {
   printVal(GL_RENDERER, "GL_VENDOR");
   printVal(GL_VENDOR, "GL_RENDERER");
   printVal(GL_VERSION, "GL_VERSION");
+
+//  std::cout << "..." << std::endl;
+//
+//  Vec end = twobody(0.01, 0.01, Vec(0, 100), Vec(0, -1));
+//
+//  std::cout << end << std::endl;
+
+//  return;
 
   // https://stackoverflow.com/questions/31482816/opengl-is-there-an-easier-way-to-fill-window-with-a-texture-instead-using-vbo
   GLuint fb = 0;

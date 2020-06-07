@@ -1,3 +1,7 @@
+#pragma once
+
+#include <iostream>
+
 struct Vec {
   float x, y;
 
@@ -6,6 +10,13 @@ struct Vec {
 
   __host__ __device__
   Vec(float x, float y): x(x), y(y) {}
+
+  __host__ __device__
+  Vec& operator+=(const Vec& u) {
+    x += u.x;
+    y += u.y;
+    return *this;
+  }
 
   __host__ __device__
   friend Vec operator+(const Vec& a, const Vec& b) {
@@ -25,6 +36,11 @@ struct Vec {
   __host__ __device__
   friend Vec operator*(const Vec& v, float k) {
     return Vec(v.x * k, v.y * k);
+  }
+
+  __host__ __device__
+  friend Vec operator*(float k, const Vec& v) {
+    return v * k;
   }
 
   __host__ __device__
@@ -70,6 +86,10 @@ struct Vec {
       x * c - y * s,
       x * s + y * c
     );
+  }
+
+  friend std::ostream& operator<<(std::ostream& out, const Vec& v) {
+    return out << "(" << v.x << " " << v.y << ")";
   }
 };
 
