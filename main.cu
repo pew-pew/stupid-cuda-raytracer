@@ -108,67 +108,105 @@ color hsl2rgb(float h, float s, float l) {
 
 
 struct World {
-  float pos_x = 0, pos_y = 0;
+  Vec curr_pos = Vec(0, 0);
+  Vec curr_dir = Vec(0, 1);
 
   __device__
-  color worldAt(float x, float y) {
-    if ((Vec(x, y) - Vec(pos_x, pos_y)).lensq() < 0.1 * 0.1) {
+  color worldAt(Vec pos) {
+    if ((pos - curr_pos).lensq() < 0.1 * 0.1) {
       return {0, 60, 20};
     }
 
-    x = std::floor(x * 10) / 10;
-    y = std::floor(y * 10) / 10;
+    float x = std::floor(pos.x * 10) / 10;
+    float y = std::floor(pos.y * 10) / 10;
     return {
         int(mod(int(x * 255), 255)),
         int(mod(int(y * 255), 255)),
-        125,
+        (int(std::floor(x) + std::floor(y)) % 2) * 120,
     };
+  }
+
+  __host__ __device__
+  std::tuple<Vec, Vec, int> trace(Vec pos, Vec delta, Vec dir, float t) {
+    Vec m0(1, 0);
+    Vec d0 = Vec(1, 0);//.rotateBy(t / 10);
+
+    Vec m1(1, 0.7);
+    Vec d1 = Vec(2, 0);//.rotateBy(t);
+    m1 -= d1 / 2;
+
+    int refl = 0;
+
+    int lastInters = -1;
+    while (refl < 10) {
+      float tMy0 = intersectionTime(pos, delta, m0, d0);
+      float tOther0 = intersectionTime(m0, d0, pos, delta);
+
+      float tMy1 = intersectionTime(pos, delta, m1, d1);
+      float tOther1 = intersectionTime(m1, d1, pos, delta);
+
+      bool inters0 = (0 <= tOther0 && tOther0 <= 1 && 0 <= tMy0 && tMy0 <= 1 && lastInters != 0);
+      bool inters1 = (0 <= tOther1 && tOther1 <= 1 && 0 <= tMy1 && tMy1 <= 1 && lastInters != 1);
+
+      if (inters0 && (!inters1 || tMy0 < tMy1)) {
+//        if ((pos - m0).isLeftTo(d0)) {
+//          refl = 100;
+////          pos = pos + delta * (tMy0 * 0.99);
+//          break;
+//        }
+
+        refl++;
+        Vec mid = m1 + d1 * tOther0;
+        pos = mid;
+        dir = dir.ortoRotate(d0, d1);
+        delta = delta.ortoRotate(d0, d1)/*.symmetryOff(d0)*/ * (1 - tMy0);
+        lastInters = 1;
+      } else if (inters1 && (!inters0 || tMy1 < tMy0)) {
+//        if ((pos - m1).isLeftTo(-d1)) {
+//          refl = 100;
+////          pos = pos + delta * (tMy1 * 0.99);
+//          break;
+//        }
+
+        refl++;
+        Vec mid = m0 + d0 * tOther1;
+        pos = mid;
+        dir = dir.ortoRotate(d1, d0);
+        delta = delta.ortoRotate(d1, d0)/*.symmetryOff(d0)*/ * (1 - tMy1);
+        lastInters = 0;
+      } else {
+        pos += delta;
+        break;
+      }
+    }
+
+    return {pos, dir, refl};
   }
 
   __device__
   color viewAt(float dx, float dy, float t) {
+    if (dx*dx + dy*dy < 0.1 * 0.1) {
+      return {0, 60, 20};
+    }
+
     float brightness = 1;
 
-    Vec pos(pos_x, pos_y);
-    Vec d(dx, dy);
+    Vec d = Vec(dx, dy).ortoRotate(Vec(0, 1), curr_dir);
 
-//    Vec m0(1, 0);
-//    Vec d0 = Vec(1, 1).rotateBy(t / 10);
-//    float itMy = intersectionTime(pos, d, m0, d0);
-//    float itOther = intersectionTime(m0, d0, pos, d);
-//    Vec fin;
-//    if (itOther < 0 || itOther > 1 || itMy < 0 || itMy > 1) {
-//      fin = pos + d;
-//    } else {
-//      brightness = 0.6;
-//      Vec mid = pos + d * itMy;
-//      fin = mid + d.symmetryOff(d0) * (1 - itMy);
-////      fin = pos + d * itMy;
-//    }
-
-    Vec vel = d / d.len();
-    float dist = d.len();
-    Vec c0(0, 1);
-
-//    Vec fin = c0 + twobody(0.001, dist, (pos - c0), vel);
-
-
-
-    float dt = 0.001;
-    for (int i = 0; i < 10000 && dist > 0; i++) {
-      Vec r = (c0 - pos);
-      Vec f = r / (r.len() * r.lensq());
-      vel += f * dt;
-      pos += vel * dt;
-      dist -= vel.len() * dt;
-    }
-    Vec fin = pos;
+    auto res = trace(curr_pos, d, Vec(0, 0), t);
+    auto fin = std::get<0>(res);
+    auto refl = std::get<2>(res);
+    brightness /= (1 + refl);
 
     int r, g, b;
-    auto col = worldAt(fin.x, fin.y);
+    auto col = worldAt(fin);
     r = std::get<0>(col);
     g = std::get<1>(col);
     b = std::get<2>(col);
+
+    if (brightness < 50) {
+      brightness = 1;
+    }
 
 //    float k = std::max(0.3f, 1 - (dx*dx + dy*dy));
     return {r * brightness, g * brightness, b * brightness};
@@ -286,7 +324,7 @@ void dow() {
   cudaSurfaceObject_t surf;
   assert(cudaSuccess == cudaCreateSurfaceObject(&surf, &descr));
 
-  Axis dx, dy;
+  Axis dx, dy, dphi;
   World world;
 
   auto prev_frame = std::chrono::steady_clock::now();
@@ -296,7 +334,7 @@ void dow() {
     float dt = std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(now - prev_frame).count();
     prev_frame = now;
 
-    std::cout << dt - 1/60.0f << std::endl;
+    std::cout << world.curr_pos.x << " " << world.curr_pos.y << " - " << dt - 1/60.0f << std::endl;
 
     SDL_Event evt;
     bool quit = false;
@@ -314,6 +352,10 @@ void dow() {
             dy.pos = true; break;
           case (SDLK_s):
             dy.neg = true; break;
+          case (SDLK_q):
+            dphi.pos = true; break;
+          case (SDLK_e):
+            dphi.neg = true; break;
         }
       }
       if (evt.type == SDL_KEYUP) {
@@ -326,6 +368,10 @@ void dow() {
             dy.pos = false; break;
           case (SDLK_s):
             dy.neg = false; break;
+          case (SDLK_q):
+            dphi.pos = false; break;
+          case (SDLK_e):
+            dphi.neg = false; break;
         }
       }
     }
@@ -334,8 +380,10 @@ void dow() {
 
     float t = std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(prev_frame - start).count();
 
-    world.pos_x += dx.delta() * dt;
-    world.pos_y += dy.delta() * dt;
+    world.curr_dir = world.curr_dir.rotateBy(dphi.delta() * dt);
+    auto newView = world.trace(world.curr_pos, Vec(dx.delta(), dy.delta()).ortoRotate(Vec(0, 1), world.curr_dir) * dt, world.curr_dir, t);
+    world.curr_pos = std::get<0>(newView);
+    world.curr_dir = std::get<1>(newView);
 
     render<<<10, 256>>>(W, H, surf, world, t);
     cudaDeviceSynchronize();

@@ -12,9 +12,37 @@ struct Vec {
   Vec(float x, float y): x(x), y(y) {}
 
   __host__ __device__
+  Vec& operator=(const Vec& u) {
+    x = u.x;
+    y = u.y;
+    return *this;
+  }
+
+  __host__ __device__
   Vec& operator+=(const Vec& u) {
     x += u.x;
     y += u.y;
+    return *this;
+  }
+
+  __host__ __device__
+  Vec& operator-=(const Vec& u) {
+    x -= u.x;
+    y -= u.y;
+    return *this;
+  }
+
+  __host__ __device__
+  Vec& operator*=(float k) {
+    x *= k;
+    y *= k;
+    return *this;
+  }
+
+  __host__ __device__
+  Vec& operator/=(float k) {
+    x /= k;
+    y /= k;
     return *this;
   }
 
@@ -88,8 +116,23 @@ struct Vec {
     );
   }
 
+  __host__ __device__
+  Vec ortoRotate(const Vec& src, const Vec& dst) const {
+    float a = src.dot(dst) / src.lensq();
+    float b = src.cross(dst) / src.lensq();
+    return Vec(
+      x * a - y * b,
+      x * b + y * a
+    );
+  }
+
   friend std::ostream& operator<<(std::ostream& out, const Vec& v) {
     return out << "(" << v.x << " " << v.y << ")";
+  }
+
+  __host__ __device__
+  bool isLeftTo(const Vec& other) const {
+    return (*this).cross(other) >= 0;
   }
 };
 
