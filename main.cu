@@ -74,14 +74,14 @@ struct SDLOpenGLContext {
 };
 
 
-//__host__ __device__
+__host__ __device__
 float mod(float x, float y) {
   return x - std::floor(x / y) * y;
 }
 
 using color = std::tuple<int, int, int>;
 
-//__host__ __device__
+__host__ __device__
 color hsl2rgb(float h, float s, float l) {
   h = mod(h, 360);
   float c = (1 - std::abs(2 * l - 1)) * s;
@@ -108,7 +108,7 @@ color hsl2rgb(float h, float s, float l) {
 struct World {
   float pos_x = 0, pos_y = 0;
 
-//  __device__
+  __device__
   color worldAt(float x, float y) {
     x = std::floor(x * 10) / 10;
     y = std::floor(y * 10) / 10;
@@ -119,7 +119,7 @@ struct World {
     };
   }
 
-//  __device__
+  __device__
   color viewAt(float dx, float dy, float t) {
     t = std::sin(t);
     t = std::pow(std::abs(t), 1/1.5f) * (t < 0 ? -1 : 1);
@@ -154,30 +154,6 @@ struct Axis {
   }
 };
 
-//__global__
-//void render(int w, int h, color *colors, World world, float t) {
-//  float k = std::min(w, h) / 2.0f;
-//
-//  int idx_x = blockIdx.x * blockDim.x + threadIdx.x;
-//  int stride_x = blockDim.x * gridDim.x;
-//
-//  int idx_y = blockIdx.y * blockDim.y + threadIdx.y;
-//  int stride_y = blockDim.y * gridDim.y;
-//
-//  for (int y = idx_y; y < h; y += stride_y) {
-//    for (int x = idx_x; x < w; x += stride_x) {
-//      float rel_x = (x + 0.5f - w / 2.0f) / k;
-//      float rel_y = -(y + 0.5f - h / 2.0f) / k;
-//
-//      auto &targ = colors[y * w + x];
-//      auto col = world.viewAt(rel_x, rel_y, t);
-//      std::get<0>(targ) = std::get<0>(col);
-//      std::get<1>(targ) = std::get<1>(col);
-//      std::get<2>(targ) = std::get<2>(col);
-//    }
-//  }
-//}
-
 template< typename T >
 std::string int_to_hex( T i )
 {
@@ -204,14 +180,37 @@ do { \
 } while (false)
 
 
-void __global__ smt(cudaSurfaceObject_t surf) {
-  surf2Dwrite(make_uchar4(255, 0, 0, 0), surf, 0, 0);
-};
+
+__global__
+void render(int w, int h, cudaSurfaceObject_t surf, World world, float t) {
+  float k = std::min(w, h) / 2.0f;
+
+  int idx_x = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride_x = blockDim.x * gridDim.x;
+
+  int idx_y = blockIdx.y * blockDim.y + threadIdx.y;
+  int stride_y = blockDim.y * gridDim.y;
+
+  for (int y = idx_y; y < h; y += stride_y) {
+    for (int x = idx_x; x < w; x += stride_x) {
+      float rel_x = (x + 0.5f - w / 2.0f) / k;
+      float rel_y = -(y + 0.5f - h / 2.0f) / k;
+
+      auto col = world.viewAt(rel_x, rel_y, t);
+      surf2Dwrite(make_uchar4(
+          std::get<0>(col),
+          std::get<1>(col),
+          std::get<2>(col),
+          0
+      ), surf, x * 4, y);
+    }
+  }
+}
 
 
 void dow() {
-  const int W = 30;
-  const int H = 30;
+  const int W = 1900;
+  const int H = 1000;
   auto ctx = SDLOpenGLContext("Hello!", 100, 100, W, H, SDL_WINDOW_SHOWN | SDL_WINDOW_OPENGL);
 
   printVal(GL_RENDERER, "GL_VENDOR");
@@ -248,9 +247,6 @@ void dow() {
 
   cudaSurfaceObject_t surf;
   assert(cudaSuccess == cudaCreateSurfaceObject(&surf, &descr));
-
-  smt<<<1, 1>>>(surf);
-  cudaDeviceSynchronize();
 
 //  gpu::error::check(cudaGraphicsUnmapResources(1, &writeresource, 0));
 //
@@ -315,8 +311,8 @@ void dow() {
     world.pos_x += a * dt;
     world.pos_y += b * dt;
 
-    //    render<<<10, 256>>>(surf->w, surf->h, colors, world, t);
-    //    cudaDeviceSynchronize();
+    render<<<10, 256>>>(W, H, surf, world, t);
+    cudaDeviceSynchronize();
 
     // TODO: clear?
     glGuard(glBlitFramebuffer(0, 0, W, H, 0, 0, W, H, GL_COLOR_BUFFER_BIT, GL_NEAREST));
