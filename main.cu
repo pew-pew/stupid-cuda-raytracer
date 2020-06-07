@@ -113,9 +113,9 @@ struct World {
 
   __device__
   color worldAt(Vec pos) {
-    if ((pos - curr_pos).lensq() < 0.1 * 0.1) {
-      return {0, 60, 20};
-    }
+//    if ((pos - curr_pos).lensq() < 0.1 * 0.1) {
+//      return {0, 60, 20};
+//    }
 
     float x = std::floor(pos.x * 10) / 10;
     float y = std::floor(pos.y * 10) / 10;
@@ -128,6 +128,12 @@ struct World {
 
   __host__ __device__
   std::tuple<Vec, Vec, int> trace(Vec pos, Vec delta, Vec dir, float t) {
+    float phi = delta.len();
+    pos += delta.rotateBy(phi);
+    dir = dir.rotateBy(phi);
+    return {pos, dir, 0};
+
+
     Vec m0(1, 0);
     Vec d0 = Vec(1, 0);//.rotateBy(t / 10);
 
@@ -277,8 +283,8 @@ void render(int w, int h, cudaSurfaceObject_t surf, World world, float t) {
 
 
 void dow() {
-  const int W = 800;
-  const int H = 600;
+  const int W = 1900;
+  const int H = 1000;
   auto ctx = SDLOpenGLContext("Hello!", 100, 100, W, H, SDL_WINDOW_SHOWN | SDL_WINDOW_OPENGL);
 
   printVal(GL_RENDERER, "GL_VENDOR");
@@ -324,8 +330,10 @@ void dow() {
   cudaSurfaceObject_t surf;
   assert(cudaSuccess == cudaCreateSurfaceObject(&surf, &descr));
 
-  Axis dx, dy, dphi;
+  Axis dx, dy, dphi, dz;
   World world;
+
+  std::cout << std::endl;
 
   auto prev_frame = std::chrono::steady_clock::now();
   auto start = prev_frame;
@@ -334,7 +342,9 @@ void dow() {
     float dt = std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(now - prev_frame).count();
     prev_frame = now;
 
-    std::cout << world.curr_pos.x << " " << world.curr_pos.y << " - " << dt - 1/60.0f << std::endl;
+    std::cout << world.curr_pos.x << " " << world.curr_pos.y << "      "
+              << world.curr_dir.x << " " << world.curr_dir.y << "      "
+              << dt - 1/60.0f << "                            \r";
 
     SDL_Event evt;
     bool quit = false;
@@ -356,6 +366,10 @@ void dow() {
             dphi.pos = true; break;
           case (SDLK_e):
             dphi.neg = true; break;
+          case (SDLK_z):
+            dz.pos = true; break;
+          case (SDLK_x):
+            dz.neg = true; break;
         }
       }
       if (evt.type == SDL_KEYUP) {
@@ -372,6 +386,10 @@ void dow() {
             dphi.pos = false; break;
           case (SDLK_e):
             dphi.neg = false; break;
+          case (SDLK_z):
+            dz.pos = false; break;
+          case (SDLK_x):
+            dz.neg = false; break;
         }
       }
     }
@@ -384,6 +402,7 @@ void dow() {
     auto newView = world.trace(world.curr_pos, Vec(dx.delta(), dy.delta()).ortoRotate(Vec(0, 1), world.curr_dir) * dt, world.curr_dir, t);
     world.curr_pos = std::get<0>(newView);
     world.curr_dir = std::get<1>(newView);
+    world.curr_dir *= std::exp(dz.delta() * dt);
 
     render<<<10, 256>>>(W, H, surf, world, t);
     cudaDeviceSynchronize();
