@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cuda_gl_interop.h>
 #include <surface_functions.h>
+#include "geom.h"
 
 using namespace std::chrono_literals;
 
@@ -110,6 +111,10 @@ struct World {
 
   __device__
   color worldAt(float x, float y) {
+    if ((Vec(x, y) - Vec(pos_x, pos_y)).lensq() < 0.1 * 0.1) {
+      return {0, 60, 20};
+    }
+
     x = std::floor(x * 10) / 10;
     y = std::floor(y * 10) / 10;
     return {
@@ -121,27 +126,33 @@ struct World {
 
   __device__
   color viewAt(float dx, float dy, float t) {
-    t = std::sin(t);
-    t = std::pow(std::abs(t), 1/1.5f) * (t < 0 ? -1 : 1);
-    float rad = (dx * dx + dy * dy);
-//    auto fin = std::complex<float>(dx, dy) * std::pow(std::complex<float>(std::exp(1)), std::complex<float>(0, std::sqrt(rad) * 5 * t));
-//    float fin_dx = fin.real();
-//    float fin_dy = fin.imag();
+    float brightness = 1;
 
-    float phi = std::sqrt(rad) * 5 * t;
-    float sin_ = std::sin(phi);
-    float cos_ = std::cos(phi);
+    Vec pos(pos_x, pos_y);
+    Vec d(dx, dy);
 
-    float fin_dx = dx * cos_ - dy * sin_;
-    float fin_dy = dx * sin_ + dy * cos_;
+    Vec m0(1, 0);
+    Vec d0 = Vec(1, 1).rotateBy(t / 10);
+    float itMy = intersectionTime(pos, d, m0, d0);
+    float itOther = intersectionTime(m0, d0, pos, d);
+    Vec fin;
+    if (itOther < 0 || itOther > 1 || itMy < 0 || itMy > 1) {
+      fin = pos + d;
+    } else {
+      brightness = 0.6;
+      Vec mid = pos + d * itMy;
+      fin = mid + d.symmetryOff(d0) * (1 - itMy);
+//      fin = pos + d * itMy;
+    }
+
     int r, g, b;
-    auto col = worldAt(pos_x + fin_dx, pos_y + fin_dy);
+    auto col = worldAt(fin.x, fin.y);
     r = std::get<0>(col);
     g = std::get<1>(col);
     b = std::get<2>(col);
 
-    float k = std::max(0.3f, 1 - (dx*dx + dy*dy));
-    return {r * k, g * k, b * k};
+//    float k = std::max(0.3f, 1 - (dx*dx + dy*dy));
+    return {r * brightness, g * brightness, b * brightness};
   }
 };
 
@@ -194,7 +205,7 @@ void render(int w, int h, cudaSurfaceObject_t surf, World world, float t) {
   for (int y = idx_y; y < h; y += stride_y) {
     for (int x = idx_x; x < w; x += stride_x) {
       float rel_x = (x + 0.5f - w / 2.0f) / k;
-      float rel_y = -(y + 0.5f - h / 2.0f) / k;
+      float rel_y = (y + 0.5f - h / 2.0f) / k;
 
       auto col = world.viewAt(rel_x, rel_y, t);
       surf2Dwrite(make_uchar4(
@@ -209,8 +220,8 @@ void render(int w, int h, cudaSurfaceObject_t surf, World world, float t) {
 
 
 void dow() {
-  const int W = 1900;
-  const int H = 1000;
+  const int W = 800;
+  const int H = 600;
   auto ctx = SDLOpenGLContext("Hello!", 100, 100, W, H, SDL_WINDOW_SHOWN | SDL_WINDOW_OPENGL);
 
   printVal(GL_RENDERER, "GL_VENDOR");
@@ -248,18 +259,8 @@ void dow() {
   cudaSurfaceObject_t surf;
   assert(cudaSuccess == cudaCreateSurfaceObject(&surf, &descr));
 
-//  gpu::error::check(cudaGraphicsUnmapResources(1, &writeresource, 0));
-//
-//  gpu::error::check(cudaGraphicsUnregisterResource(writeresource));
-//  int dbl = 123;
-//  glGuard(glGetIntegerv(GL_DOUBLEBUFFER, &dbl));
-//  std::cout << "dbl: " << dbl << std::endl;
-
   Axis dx, dy;
   World world;
-
-//  color *colors;
-//  cudaMallocManaged(&colors, sizeof(color) * W * H);
 
   auto prev_frame = std::chrono::steady_clock::now();
   auto start = prev_frame;
@@ -305,11 +306,9 @@ void dow() {
       break;
 
     float t = std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(prev_frame - start).count();
-    float a = std::sin(t);
-    float b = std::sin(t);
 
-    world.pos_x += a * dt;
-    world.pos_y += b * dt;
+    world.pos_x += dx.delta() * dt;
+    world.pos_y += dy.delta() * dt;
 
     render<<<10, 256>>>(W, H, surf, world, t);
     cudaDeviceSynchronize();
@@ -322,7 +321,10 @@ void dow() {
     auto left = std::chrono::steady_clock::now() - prev_frame;
     SDL_Delay(std::max(0.0f, 1000.0f / 60 - std::chrono::duration_cast<std::chrono::milliseconds>(left).count()));
   }
-//  cudaFree(colors);
+
+  assert(cudaSuccess == cudaDestroySurfaceObject(surf));
+  assert(cudaSuccess == cudaGraphicsUnmapResources(1, &resource));
+  assert(cudaSuccess == cudaGraphicsUnregisterResource(resource));
 }
 
 int main(int, char**) {
