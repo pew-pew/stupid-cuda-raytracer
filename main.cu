@@ -10,7 +10,7 @@
 #include <cuda_gl_interop.h>
 #include <surface_functions.h>
 #include "geom.h"
-#include "orbit.h"
+#include "world.h"
 
 using namespace std::chrono_literals;
 
@@ -72,150 +72,6 @@ struct SDLOpenGLContext {
     SDL_GL_DeleteContext(ctx);
     SDL_DestroyWindow(win);
     SDL_Quit();
-  }
-};
-
-
-__host__ __device__
-float mod(float x, float y) {
-  return x - std::floor(x / y) * y;
-}
-
-using color = std::tuple<int, int, int>;
-
-__host__ __device__
-color hsl2rgb(float h, float s, float l) {
-  h = mod(h, 360);
-  float c = (1 - std::abs(2 * l - 1)) * s;
-  float x = c * (1 - std::abs(mod(h / 60, 2) - 1));
-  float m = l - c / 2;
-  float r_ = 0, g_ = 0, b_ = 0;
-  if (h < 60) {
-    r_ = c; g_ = x;
-  } else if (h < 120) {
-    r_ = x; g_ = c;
-  } else if (h < 180) {
-    g_ = c; b_ = x;
-  } else if (h < 240) {
-    g_ = x; b_ = c;
-  } else if (h < 300) {
-    r_ = x; b_ = c;
-  } else {
-    r_ = c; b_ = x;
-  }
-  return {(r_ + m) * 255, (g_ + m) * 255, (b_ + m) * 255};
-}
-
-
-struct World {
-  Vec curr_pos = Vec(0, 0);
-  Vec curr_dir = Vec(0, 1);
-
-  __device__
-  color worldAt(Vec pos) {
-//    if ((pos - curr_pos).lensq() < 0.1 * 0.1) {
-//      return {0, 60, 20};
-//    }
-
-    float x = std::floor(pos.x * 10) / 10;
-    float y = std::floor(pos.y * 10) / 10;
-    return {
-        int(mod(int(x * 255), 255)),
-        int(mod(int(y * 255), 255)),
-        (int(std::floor(x) + std::floor(y)) % 2) * 120,
-    };
-  }
-
-  __host__ __device__
-  std::tuple<Vec, Vec, int> trace(Vec pos, Vec delta, Vec dir, float t) {
-    float phi = delta.len();
-    pos += delta.rotateBy(phi);
-    dir = dir.rotateBy(phi);
-    return {pos, dir, 0};
-
-
-    Vec m0(1, 0);
-    Vec d0 = Vec(1, 0);//.rotateBy(t / 10);
-
-    Vec m1(1, 0.7);
-    Vec d1 = Vec(2, 0);//.rotateBy(t);
-    m1 -= d1 / 2;
-
-    int refl = 0;
-
-    int lastInters = -1;
-    while (refl < 10) {
-      float tMy0 = intersectionTime(pos, delta, m0, d0);
-      float tOther0 = intersectionTime(m0, d0, pos, delta);
-
-      float tMy1 = intersectionTime(pos, delta, m1, d1);
-      float tOther1 = intersectionTime(m1, d1, pos, delta);
-
-      bool inters0 = (0 <= tOther0 && tOther0 <= 1 && 0 <= tMy0 && tMy0 <= 1 && lastInters != 0);
-      bool inters1 = (0 <= tOther1 && tOther1 <= 1 && 0 <= tMy1 && tMy1 <= 1 && lastInters != 1);
-
-      if (inters0 && (!inters1 || tMy0 < tMy1)) {
-//        if ((pos - m0).isLeftTo(d0)) {
-//          refl = 100;
-////          pos = pos + delta * (tMy0 * 0.99);
-//          break;
-//        }
-
-        refl++;
-        Vec mid = m1 + d1 * tOther0;
-        pos = mid;
-        dir = dir.ortoRotate(d0, d1);
-        delta = delta.ortoRotate(d0, d1)/*.symmetryOff(d0)*/ * (1 - tMy0);
-        lastInters = 1;
-      } else if (inters1 && (!inters0 || tMy1 < tMy0)) {
-//        if ((pos - m1).isLeftTo(-d1)) {
-//          refl = 100;
-////          pos = pos + delta * (tMy1 * 0.99);
-//          break;
-//        }
-
-        refl++;
-        Vec mid = m0 + d0 * tOther1;
-        pos = mid;
-        dir = dir.ortoRotate(d1, d0);
-        delta = delta.ortoRotate(d1, d0)/*.symmetryOff(d0)*/ * (1 - tMy1);
-        lastInters = 0;
-      } else {
-        pos += delta;
-        break;
-      }
-    }
-
-    return {pos, dir, refl};
-  }
-
-  __device__
-  color viewAt(float dx, float dy, float t) {
-    if (dx*dx + dy*dy < 0.1 * 0.1) {
-      return {0, 60, 20};
-    }
-
-    float brightness = 1;
-
-    Vec d = Vec(dx, dy).ortoRotate(Vec(0, 1), curr_dir);
-
-    auto res = trace(curr_pos, d, Vec(0, 0), t);
-    auto fin = std::get<0>(res);
-    auto refl = std::get<2>(res);
-    brightness /= (1 + refl);
-
-    int r, g, b;
-    auto col = worldAt(fin);
-    r = std::get<0>(col);
-    g = std::get<1>(col);
-    b = std::get<2>(col);
-
-    if (brightness < 50) {
-      brightness = 1;
-    }
-
-//    float k = std::max(0.3f, 1 - (dx*dx + dy*dy));
-    return {r * brightness, g * brightness, b * brightness};
   }
 };
 
@@ -290,14 +146,6 @@ void dow() {
   printVal(GL_RENDERER, "GL_VENDOR");
   printVal(GL_VENDOR, "GL_RENDERER");
   printVal(GL_VERSION, "GL_VERSION");
-
-//  std::cout << "..." << std::endl;
-//
-//  Vec end = twobody(0.01, 0.01, Vec(0, 100), Vec(0, -1));
-//
-//  std::cout << end << std::endl;
-
-//  return;
 
   // https://stackoverflow.com/questions/31482816/opengl-is-there-an-easier-way-to-fill-window-with-a-texture-instead-using-vbo
   GLuint fb = 0;
@@ -399,10 +247,13 @@ void dow() {
     float t = std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(prev_frame - start).count();
 
     world.curr_dir = world.curr_dir.rotateBy(dphi.delta() * dt);
-    auto newView = world.trace(world.curr_pos, Vec(dx.delta(), dy.delta()).ortoRotate(Vec(0, 1), world.curr_dir) * dt, world.curr_dir, t);
-    world.curr_pos = std::get<0>(newView);
-    world.curr_dir = std::get<1>(newView);
-    world.curr_dir *= std::exp(dz.delta() * dt);
+
+    Vec relWalkDir = Vec(
+        dx.delta(),
+        dy.delta()
+    );
+    world.walk(relWalkDir, dt, t);
+    world.zoom(dz.delta() * dt);
 
     render<<<10, 256>>>(W, H, surf, world, t);
     cudaDeviceSynchronize();

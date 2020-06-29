@@ -19,6 +19,11 @@ struct Vec {
   }
 
   __host__ __device__
+  friend bool operator==(const Vec& a, const Vec& b) {
+    return a.x == b.x && a.y == b.y;
+  }
+
+  __host__ __device__
   Vec& operator+=(const Vec& u) {
     x += u.x;
     y += u.y;
