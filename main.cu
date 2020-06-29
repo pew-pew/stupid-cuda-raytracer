@@ -246,8 +246,7 @@ void dow() {
 
     float t = std::chrono::duration_cast<std::chrono::duration<float, std::chrono::seconds::period>>(prev_frame - start).count();
 
-    world.curr_dir = world.curr_dir.rotateBy(dphi.delta() * dt);
-
+    world.rotate(dphi.delta() * dt);
     Vec relWalkDir = Vec(
         dx.delta(),
         dy.delta()

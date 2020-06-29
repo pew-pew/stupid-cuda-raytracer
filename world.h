@@ -159,6 +159,11 @@ struct World {
   }
 
   __host__ __device__
+  void rotate(float a) {
+    curr_dir = curr_dir.rotateBy(a);
+  }
+
+  __host__ __device__
   void zoom(float k) {
     curr_dir *= std::exp(k);
   }
