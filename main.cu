@@ -110,6 +110,15 @@ do { \
 } while (false)
 
 
+#define cudaCheck(expr) _cudaCheck((expr), #expr, __FILE__, __LINE__)
+inline void _cudaCheck(cudaError_t code, const char* expr, const char *file, int line)
+{
+  if (code == cudaSuccess) return;
+  std::cerr << "Cuda call failed at " << file << ":" << line << ": " << expr << ":\n"
+            << cudaGetErrorString(code);
+  exit(1);
+}
+
 
 __global__
 void render(int w, int h, cudaSurfaceObject_t surf, World world, float t) {
@@ -165,18 +174,18 @@ void dow() {
 
   // https://forums.developer.nvidia.com/t/reading-and-writing-opengl-textures-with-cuda/31746/6
   cudaGraphicsResource *resource;
-  assert(cudaSuccess == cudaGraphicsGLRegisterImage(&resource, tex, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore));
-  assert(cudaSuccess == cudaGraphicsMapResources(1, &resource));
+  cudaCheck(cudaGraphicsGLRegisterImage(&resource, tex, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsSurfaceLoadStore));
+  cudaCheck(cudaGraphicsMapResources(1, &resource));
 
   cudaArray_t writeArray;
-  assert(cudaSuccess == cudaGraphicsSubResourceGetMappedArray(&writeArray, resource, 0, 0));
+  cudaCheck(cudaGraphicsSubResourceGetMappedArray(&writeArray, resource, 0, 0));
 
   cudaResourceDesc descr = {};
   descr.resType = cudaResourceTypeArray;
   descr.res.array.array = writeArray;
 
   cudaSurfaceObject_t surf;
-  assert(cudaSuccess == cudaCreateSurfaceObject(&surf, &descr));
+  cudaCheck(cudaCreateSurfaceObject(&surf, &descr));
 
   Axis dx, dy, dphi, dz;
   World world;
@@ -266,9 +275,9 @@ void dow() {
     SDL_Delay(std::max(0.0f, 1000.0f / 60 - std::chrono::duration_cast<std::chrono::milliseconds>(left).count()));
   }
 
-  assert(cudaSuccess == cudaDestroySurfaceObject(surf));
-  assert(cudaSuccess == cudaGraphicsUnmapResources(1, &resource));
-  assert(cudaSuccess == cudaGraphicsUnregisterResource(resource));
+  cudaCheck(cudaDestroySurfaceObject(surf));
+  cudaCheck(cudaGraphicsUnmapResources(1, &resource));
+  cudaCheck(cudaGraphicsUnregisterResource(resource));
 }
 
 int main(int, char**) {
